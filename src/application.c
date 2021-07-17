@@ -1,17 +1,16 @@
 #include <application.h>
 
-#define BATTERY_UPDATE_INTERVAL   (2000)
+#define BATTERY_UPDATE_INTERVAL (7 * 60 * 60 * 1000) // 7 hodin
+#define BATTERY_UPDATE_SERVICE_INTERVAL (10 * 60 * 1000) // 10 minut
+#define BATTERY_UPDATE_INITIAL_INTERVAL (60 * 1000) // 1 minuta
 
-#define UPDATE_NORMAL_INTERVAL             (3500)
-#define BAROMETER_UPDATE_NORMAL_INTERVAL   (3500)
+#define UPDATE_NORMAL_INTERVAL             (2000)
 
-#define TEMPERATURE_TAG_PUB_NO_CHANGE_INTEVAL (3500)
+#define TEMPERATURE_TAG_PUB_VALUE_CHANGE 0.5f
+#define HUMIDITY_TAG_PUB_VALUE_CHANGE 2
 
-#define HUMIDITY_TAG_PUB_NO_CHANGE_INTEVAL (3500)
+#define RADIO_SEND_INTERVAL 30 * 1000               // 30 sekund
 
-#define LUX_METER_TAG_PUB_NO_CHANGE_INTEVAL (3500)
-
-#define BAROMETER_TAG_PUB_NO_CHANGE_INTEVAL (3500)
 
 struct {
     event_param_t temperature;
@@ -21,6 +20,9 @@ struct {
     event_param_t pressureMeters;
 
 } params;
+
+bool first_battery_send = true;
+
 
 // LED instance
 twr_led_t led;
@@ -60,6 +62,31 @@ void battery_event_handler(twr_module_battery_event_t event, void *event_param)
             twr_radio_pub_barometer(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &(params.pressure.value), &(params.pressureMeters.value));
         }
     }
+
+    (void) event;
+    (void) event_param;
+
+    float voltage;
+    int percentage;
+
+    if(event == TWR_MODULE_BATTERY_EVENT_UPDATE)
+    {
+        if (twr_module_battery_get_voltage(&voltage))
+        {
+            if(first_battery_send)
+            {
+                twr_module_battery_set_update_interval(BATTERY_UPDATE_SERVICE_INTERVAL);
+                twr_scheduler_register(switch_to_normal_mode_task, NULL, SERVICE_INTERVAL_INTERVAL);
+            }
+            values.battery_voltage = voltage;
+            twr_radio_pub_battery(&values.battery_voltage);
+        }
+
+        if (twr_module_battery_get_charge_level(&percentage))
+        {
+            values.battery_pct = percentage;
+        }
+    }
 }
 
 
@@ -73,24 +100,25 @@ void climate_module_event_handler(twr_module_climate_event_t event, void *event_
     {
         if (twr_module_climate_get_temperature_celsius(&value))
         {
-            if ((params.temperature.next_pub < twr_scheduler_get_spin_tick()))
+            if ((fabs(value - params.temperature.value) >= TEMPERATURE_TAG_PUB_VALUE_CHANGE))
             {
-                //twr_radio_pub_temperature(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &value);
-                params.temperature.value = value;
-                params.temperature.next_pub = twr_scheduler_get_spin_tick() + TEMPERATURE_TAG_PUB_NO_CHANGE_INTEVAL;
+                twr_radio_pub_temperature(0, &value);
             }
+            params.temperature.value = value;
+            twr_scheduler_plan_now(0);
         }
     }
     else if (event == TWR_MODULE_CLIMATE_EVENT_UPDATE_HYGROMETER)
     {
         if (twr_module_climate_get_humidity_percentage(&value))
         {
-            if ((params.humidity.next_pub < twr_scheduler_get_spin_tick()))
+            if ((fabs(value - params.humidity.value) >= HUMIDITY_TAG_PUB_VALUE_CHANGE))
             {
-                //twr_radio_pub_humidity(TWR_RADIO_PUB_CHANNEL_R3_I2C0_ADDRESS_DEFAULT, &value);
-                params.humidity.value = value;
-                params.humidity.next_pub = twr_scheduler_get_spin_tick() + HUMIDITY_TAG_PUB_NO_CHANGE_INTEVAL;
+                twr_radio_pub_humidity(0, &value);
             }
+
+            params.humidity.value = value;
+            twr_scheduler_plan_now(0);
         }
     }
     else if (event == TWR_MODULE_CLIMATE_EVENT_UPDATE_LUX_METER)
@@ -101,12 +129,9 @@ void climate_module_event_handler(twr_module_climate_event_t event, void *event_
             {
                 value = 0;
             }
-            if ((params.illuminance.next_pub < twr_scheduler_get_spin_tick()) ||
-                    ((value == 0) && (params.illuminance.value != 0)) || ((value > 1) && (params.illuminance.value == 0)))
+            if (((value == 0) && (params.illuminance.value != 0)) || ((value > 1) && (params.illuminance.value == 0)))
             {
-                //twr_radio_pub_luminosity(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &value);
                 params.illuminance.value = value;
-                params.illuminance.next_pub = twr_scheduler_get_spin_tick() + LUX_METER_TAG_PUB_NO_CHANGE_INTEVAL;
             }
         }
     }
@@ -114,23 +139,35 @@ void climate_module_event_handler(twr_module_climate_event_t event, void *event_
     {
         if (twr_module_climate_get_pressure_pascal(&value))
         {
-            if ((params.pressure.next_pub < twr_scheduler_get_spin_tick()))
+            float meter;
+
+            if (!twr_module_climate_get_altitude_meter(&meter))
             {
-                float meter;
-
-                if (!twr_module_climate_get_altitude_meter(&meter))
-                {
-                    return;
-                }
-
-                //twr_radio_pub_barometer(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &value, &meter);
-                params.pressure.value = value;
-                params.pressureMeters.value = meter;
-
-                params.pressure.next_pub = twr_scheduler_get_spin_tick() + BAROMETER_TAG_PUB_NO_CHANGE_INTEVAL;
+                return;
             }
+
+            //twr_radio_pub_barometer(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &value, &meter);
+            params.pressure.value = value;
+            params.pressureMeters.value = meter;
         }
     }
+}
+
+
+void send_data_over_radio()
+{
+    twr_radio_pub_temperature(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &(params.temperature.value));
+    twr_radio_pub_humidity(TWR_RADIO_PUB_CHANNEL_R3_I2C0_ADDRESS_DEFAULT, &(params.humidity.value));
+    twr_radio_pub_luminosity(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &(params.illuminance.value));
+    twr_radio_pub_barometer(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &(params.pressure.value), &(params.pressureMeters.value));
+    twr_scheduler_plan_current_from_now(RADIO_SEND_INTERVAL);
+
+}
+
+void switch_to_normal_mode_task(void *param)
+{
+    twr_module_battery_set_update_interval(BATTERY_UPDATE_INTERVAL);
+    twr_scheduler_unregister(twr_scheduler_get_current_task_id());
 }
 
 void application_init(void)
@@ -152,7 +189,7 @@ void application_init(void)
     // Initialize battery
     twr_module_battery_init();
     twr_module_battery_set_event_handler(battery_event_handler, NULL);
-    twr_module_battery_set_update_interval(BATTERY_UPDATE_INTERVAL);
+    twr_module_battery_set_update_interval(BATTERY_UPDATE_INITIAL_INTERVAL);
 
     // Initialize climate module
     twr_module_climate_init();
