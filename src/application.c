@@ -76,6 +76,31 @@ void battery_event_handler(twr_module_battery_event_t event, void *event_param)
             twr_radio_pub_battery(&params.voltage.value);
         }
     }
+
+    (void) event;
+    (void) event_param;
+
+    float voltage;
+    int percentage;
+
+    if(event == TWR_MODULE_BATTERY_EVENT_UPDATE)
+    {
+        if (twr_module_battery_get_voltage(&voltage))
+        {
+            if(first_battery_send)
+            {
+                twr_module_battery_set_update_interval(BATTERY_UPDATE_SERVICE_INTERVAL);
+                twr_scheduler_register(switch_to_normal_mode_task, NULL, SERVICE_INTERVAL_INTERVAL);
+            }
+            values.battery_voltage = voltage;
+            twr_radio_pub_battery(&values.battery_voltage);
+        }
+
+        if (twr_module_battery_get_charge_level(&percentage))
+        {
+            values.battery_pct = percentage;
+        }
+    }
 }
 
 
@@ -135,6 +160,10 @@ void climate_module_event_handler(twr_module_climate_event_t event, void *event_
                 return;
             }
 
+<<<<<<< HEAD
+=======
+            //twr_radio_pub_barometer(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &value, &meter);
+>>>>>>> e054c176129b15c283f88b6159fb5e22d7fdcb59
             params.pressure.value = value;
             params.pressureMeters.value = meter;
         }
@@ -152,6 +181,14 @@ void send_data_over_radio()
 
 }
 
+<<<<<<< HEAD
+=======
+void switch_to_normal_mode_task(void *param)
+{
+    twr_module_battery_set_update_interval(BATTERY_UPDATE_INTERVAL);
+    twr_scheduler_unregister(twr_scheduler_get_current_task_id());
+}
+>>>>>>> e054c176129b15c283f88b6159fb5e22d7fdcb59
 
 void application_init(void)
 {
